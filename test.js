@@ -1,6 +1,6 @@
 var expect = require('chai').expect;
 var async = require('async');
-var mysql = require('mq-node');
+var mysql = require('mysql2');
 var fs = require('fs');
 var mysqlDump = require('./');
 
@@ -455,7 +455,7 @@ describe('mysql test', function() {
 
 			file = file.replace("VALUES (1,", "VALUES (2,");
 
-			var connection = require('mq-node')({
+			var connection = require('mysql2')({
 				host: MYSQL_HOST,
 				user: MYSQL_USER,
 				password: MYSQL_PASS,
@@ -467,7 +467,7 @@ describe('mysql test', function() {
 				expect(error).to.be.null;
 
 				connection.query("SELECT * FROM data_types", function(error, result) {
-	
+
 					expect(error).to.be.null;
 					expect(result.length).to.be.equal(2);
 					for (var key in result[0]) {

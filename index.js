@@ -1,5 +1,4 @@
 var async = require('async');
-var mqNode = require('mq-node');
 var _ = require('lodash');
 var fs = require('fs');
 var mysql2 = require('mysql2');
