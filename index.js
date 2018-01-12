@@ -49,12 +49,12 @@ var annotateWkbTypes = function(geometry, buffer, offset) {
 		for (var i=0; i<elements; i++) {
 			offset = annotateWkbTypes(geometry[i], buffer, offset);
 		}
-	} 
+	}
 	return offset
 }
 
 var escapeGeometryType = function(val) {
-	
+
 	var constructors = {1: "POINT", 2: "LINESTRING", 3: "POLYGON", 4: "MULTIPOINT", 5: "MULTILINESTRING", 6: "MULTIPOLYGON", 7: "GEOMETRYCOLLECTION" };
 
 	var isPointType = function(val) { return val && typeof val.x === 'number' && typeof val.y === 'number'; }
@@ -102,7 +102,7 @@ var buildInsert = function(rows,table,cols){
 					values.push(" ");
 				}
 			} else if  (rows[i][k]!=='') {
-				
+
 				if (rows[i][k]._wkbType) {
 					var geometry = escapeGeometryType(rows[i][k]);
 					values.push(geometry);
@@ -167,7 +167,7 @@ module.exports = function(options,done){
 				callback(null,options.tables);
 			}
 		},
-		createSchemaDump:['getTables',function(callback,results){
+		createSchemaDump:['getTables',function(results,callback){
 			if(!options.schema) {
 				callback();
 				return;
@@ -192,7 +192,7 @@ module.exports = function(options,done){
 				callback(err,resp);
 			});
 		}],
-		createDataDump:['createSchemaDump',function(callback,results){
+		createDataDump:['createSchemaDump',function(results,callback){
 			var tbls = [];
 			if (options.data) {
 				tbls = results.getTables; // get data for all tables
@@ -217,7 +217,7 @@ module.exports = function(options,done){
 			});
 			async.parallel(run,callback)
 		}],
-		getDataDump:['createSchemaDump','createDataDump',function(callback,results){
+		getDataDump:['createSchemaDump','createDataDump',function(results, callback){
 			if(!results.createSchemaDump || !results.createSchemaDump.length) results.createSchemaDump=[];
 			if(!results.createDataDump || !results.createDataDump.length) results.createDataDump=[];
 			callback(null,results.createSchemaDump.concat(results.createDataDump).join("\n\n"));
