@@ -1,6 +1,6 @@
 {
   "name": "mysqldump",
-  "version": "1.4.2",
+  "version": "2.0.0",
   "description": "Create a DUMP from MySQL",
   "main": "index.js",
   "scripts": {
@@ -27,12 +27,12 @@
   },
   "homepage": "https://github.com/webcaetano/mysqldump",
   "dependencies": {
-    "async": "^1.4.2",
-    "lodash": "^3.10.1",
+    "async": "^2.6.0",
+    "lodash": "^4.17.4",
     "mq-node": "^1.0.7"
   },
   "devDependencies": {
-    "chai": "^3.2.0",
-    "mocha": "^2.3.2"
+    "chai": "^4.1.2",
+    "mocha": "^4.1.0"
   }
 }
