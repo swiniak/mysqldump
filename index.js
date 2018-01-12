@@ -2,7 +2,7 @@ var async = require('async');
 var mqNode = require('mq-node');
 var _ = require('lodash');
 var fs = require('fs');
-var mysql;
+var mysql2 = require('mysql2');
 
 var extend = function(obj) {
 	for (var i = 1; i < arguments.length; i++) for (var key in arguments[i]) obj[key] = arguments[i][key];
@@ -109,7 +109,7 @@ var buildInsert = function(rows,table,cols){
 				} else  if(typeof rows[i][k] === 'number'){
 					values.push(rows[i][k]);
 				} else {
-					values.push(mysql.escape(rows[i][k]));
+					values.push(mysql2.escape(rows[i][k]));
 				}
 			} else {
 				values.push("''");
@@ -141,23 +141,24 @@ module.exports = function(options,done){
 		where: null
 	}
 
-	mysql = mqNode(extend({},defaultConnection,{
-		host:options.host,
-		user:options.user,
-		password:options.password,
-		database:options.database,
+	options = extend({},defaultConnection,defaultOptions,options);
+
+	if(!options.database) throw new Error('Database not specified');
+
+	mysql = mysql2.createConnection({
+		host: options.host,
+		user: options.user,
+		password: options.password,
+		database: options.database,
 		port:options.port,
 		charset:options.charset,
-		socketPath:options.socketPath,
-	}));
-
-	options = extend({},defaultConnection,defaultOptions,options);
-	if(!options.database) throw new Error('Database not specified');
+		socketPath:options.socketPath
+	});
 
 	async.auto({
 		getTables:function(callback){
 			if(!options.tables || !options.tables.length){ // if not especifed, get all
-				mysql.query("SHOW TABLES FROM `"+options.database+"`",function(err,data){
+				mysql.query("SHOW TABLES FROM ?",[options.database],function(err,data){
 					if(err) return callback(err);
 					var resp = [];
 					for(var i=0;i<data.length;i++) resp.push(data[i]['Tables_in_'+options.database]);
@@ -175,7 +176,7 @@ module.exports = function(options,done){
 			var run = [];
 			results.getTables.forEach(function(table){
 				run.push(function(callback){
-					mysql.query("SHOW CREATE TABLE `"+table+"`",callback);
+					mysql.query("SHOW CREATE TABLE ?", [table] ,callback);
 				})
 			})
 			async.parallel(run,function(err,data){
