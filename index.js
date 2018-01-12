@@ -120,6 +120,9 @@ var buildInsert = function(rows,table,cols){
 }
 
 module.exports = function(options,done){
+	if(done === undefined)
+		done = function () {};
+
 	var defaultConnection = {
 		host: 'localhost',
 		user: 'root',
@@ -157,14 +160,14 @@ module.exports = function(options,done){
 	async.auto({
 		getTables:function(callback){
 			if(!options.tables || !options.tables.length){ // if not especifed, get all
-				mysql.query("SHOW TABLES FROM ?",[options.database],function(err,data){
+				mysql.query("SHOW TABLES FROM `"+[options.database]+"`",function(err,data){
 					if(err) return callback(err);
 					var resp = [];
 					for(var i=0;i<data.length;i++) resp.push(data[i]['Tables_in_'+options.database]);
 					callback(err,resp);
 				});
 			} else {
-				callback(null,options.tables);
+				callback(null, options.tables);
 			}
 		},
 		createSchemaDump:['getTables',function(results,callback){
@@ -175,10 +178,10 @@ module.exports = function(options,done){
 			var run = [];
 			results.getTables.forEach(function(table){
 				run.push(function(callback){
-					mysql.query("SHOW CREATE TABLE ?", [table] ,callback);
+					mysql.query("SHOW CREATE TABLE `"+table+"`", callback);
 				})
 			})
-			async.parallel(run,function(err,data){
+			async.parallel(run,function(err,data,fields){
 				if (err) return callback(err);
 				var resp = [];
 				for(var i in data){
@@ -197,8 +200,8 @@ module.exports = function(options,done){
 			if (options.data) {
 				tbls = results.getTables; // get data for all tables
 			} else if (options.where) {
-                                tbls = Object.keys(options.where); // get data for tables with a where specified
-                        } else {
+				tbls = Object.keys(options.where); // get data for tables with a where specified
+			} else {
 				callback();
 				return;
 			}
@@ -206,13 +209,15 @@ module.exports = function(options,done){
 			_.each(tbls,function(table){
 				run.push(function(callback){
 					var opts = {cols:'*', from:"`"+table+"`"};
+					selectSql = 'SELECT * FROM `'+table+'`';
 					if ((options.where != null) && (typeof options.where[table] != 'undefined')) {
 						opts.where = options.where[table];
+						selectSql += ` where ${options.where[table]}`;
 					}
-					mysql.select(opts,function(err,data){
+					mysql.execute(selectSql, function(err,data){
 						if (err) return callback(err);
 						callback(err,buildInsert(data,table));
-					}, typeCastOptions);
+					});
 				});
 			});
 			async.parallel(run,callback)
@@ -224,8 +229,6 @@ module.exports = function(options,done){
 		}]
 	},function(err,results){
 		if(err) return done(err);
-
-		mysql.connection.end();
 		if(options.getDump) return done(err, results.getDataDump);
 		fs.writeFile(options.dest, results.getDataDump, done);
 	});
