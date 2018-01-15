@@ -2,6 +2,7 @@ var async = require('async');
 var _ = require('lodash');
 var fs = require('fs');
 var mysql2 = require('mysql2');
+var logger = require('winston');
 
 var extend = function(obj) {
 	for (var i = 1; i < arguments.length; i++) for (var key in arguments[i]) obj[key] = arguments[i][key];
@@ -228,6 +229,7 @@ module.exports = function(options,done){
 						}
 						selectSql += ` LIMIT ${opts.limit}`;
 					}
+					logger.debug(selectSql);
 					mysql.execute(selectSql, function(err,data){
 						if (err) return callback(err);
 						callback(err,buildInsert(data,table));
