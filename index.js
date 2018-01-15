@@ -215,8 +215,18 @@ module.exports = function(options,done){
 						selectSql += ` WHERE ${options.where[table]}`;
 					}
 					if ((options.order != null) && (typeof options.order[table] != 'undefined')) {
-						opts.order = options.order[table];
-						selectSql += ` ORDER BY ${options.order[table]}`;
+						opts.order = options.order;
+						if (Array.isArray(options.order)) {
+							opts.order = options.order[table];
+						}
+						selectSql += ` ORDER BY ${opts.order}`;
+					}
+					if ((options.limit != null) && (typeof options.limit[table] != 'undefined')) {
+						opts.limit = options.limit;
+						if (Array.isArray(options.limit)) {
+							opts.limit = options.limit[table];
+						}
+						selectSql += ` LIMIT ${opts.limit}`;
 					}
 					mysql.execute(selectSql, function(err,data){
 						if (err) return callback(err);
