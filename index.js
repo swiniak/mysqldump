@@ -209,10 +209,14 @@ module.exports = function(options,done){
 			_.each(tbls,function(table){
 				run.push(function(callback){
 					var opts = {cols:'*', from:"`"+table+"`"};
-					selectSql = 'SELECT * FROM `'+table+'`';
+					let selectSql = 'SELECT * FROM `'+table+'`';
 					if ((options.where != null) && (typeof options.where[table] != 'undefined')) {
 						opts.where = options.where[table];
-						selectSql += ` where ${options.where[table]}`;
+						selectSql += ` WHERE ${options.where[table]}`;
+					}
+					if ((options.order != null) && (typeof options.order[table] != 'undefined')) {
+						opts.order = options.order[table];
+						selectSql += ` ORDER BY ${options.order[table]}`;
 					}
 					mysql.execute(selectSql, function(err,data){
 						if (err) return callback(err);
