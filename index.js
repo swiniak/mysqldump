@@ -115,7 +115,9 @@ var buildInsert = function(rows,table,cols){
 				values.push("''");
 			}
 		}
-		sql.push("INSERT INTO `"+table+"` (`"+cols.join("`,`")+"`) VALUES ("+values.join()+");");
+		insertSql = "INSERT INTO `"+table+"` (`"+cols.join("`,`")+"`) VALUES ("+values.join()+");";
+		logger.debug(insertSql);
+		sql.push(insertSql);
 	}
 	return sql.join('\n');
 }
@@ -165,6 +167,7 @@ module.exports = function(options,done){
 					if(err) return callback(err);
 					var resp = [];
 					for(var i=0;i<data.length;i++) resp.push(data[i]['Tables_in_'+options.database]);
+					logger.debug(resp);
 					callback(err,resp);
 				});
 			} else {
@@ -191,6 +194,7 @@ module.exports = function(options,done){
 					if(options.dropTable) r = r.replace(/CREATE TABLE `/, 'DROP TABLE IF EXISTS `' + data[i][0]['Table'] + '`;\nCREATE TABLE `');
 					if(options.ifNotExist) r = r.replace(/CREATE TABLE `/,'CREATE TABLE IF NOT EXISTS `');
 					if(!options.autoIncrement) r = r.replace(/AUTO_INCREMENT=\d+ /g,'');
+					logger.debug(r);
 					resp.push(r)
 				}
 				callback(err,resp);
