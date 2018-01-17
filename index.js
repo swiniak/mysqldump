@@ -219,23 +219,26 @@ module.exports = function(options,done){
 						opts.where = options.where[table];
 						selectSql += ` WHERE ${options.where[table]}`;
 					}
-					if ((options.order != null) && (typeof options.order[table] != 'undefined')) {
+					if ((options.order != null) && (options.order != 'undefined')) {
 						opts.order = options.order;
-						if (Array.isArray(options.order)) {
+						if (Array.isArray(options.order) && (typeof options.order[table] != 'undefined')) {
 							opts.order = options.order[table];
 						}
 						selectSql += ` ORDER BY ${opts.order}`;
 					}
-					if ((options.limit != null) && (typeof options.limit[table] != 'undefined')) {
+					if ((options.limit != null) && (typeof options.limit != 'undefined')) {
 						opts.limit = options.limit;
-						if (Array.isArray(options.limit)) {
+						if (Array.isArray(options.limit) && (typeof options.order[table] != 'undefined')) {
 							opts.limit = options.limit[table];
 						}
 						selectSql += ` LIMIT ${opts.limit}`;
 					}
 					logger.debug(selectSql);
 					mysql.execute(selectSql, function(err,data){
-						if (err) return callback(err);
+						if (err) {
+							logger.err(selectSql + ' => ' + err);
+							return callback(err);
+						}
 						callback(err,buildInsert(data,table));
 					});
 				});
