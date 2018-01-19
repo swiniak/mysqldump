@@ -30,6 +30,7 @@
     "async": "^2.6.0",
     "lodash": "^4.17.4",
     "mysql2": "^1.5.1",
+    "synchronize": "^2.0.0",
     "winston": "^2.4.0"
   },
   "devDependencies": {

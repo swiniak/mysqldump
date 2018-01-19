@@ -3,6 +3,10 @@ var _ = require('lodash');
 var fs = require('fs');
 var mysql2 = require('mysql2');
 var logger = require('winston');
+var sync = require('synchronize');
+
+var anonymizer = undefined;
+
 
 var extend = function(obj) {
 	for (var i = 1; i < arguments.length; i++) for (var key in arguments[i]) obj[key] = arguments[i][key];
@@ -88,38 +92,53 @@ var isset = function(){
 	return true;
 }
 
-var buildInsert = function(rows,table,cols){
-	var cols = _.keys(rows[0]);
-	var sql = [];
-	for(var i in rows){
-		var values=[];
-		for(var k in rows[i]){
-			if(typeof rows[i][k]==='function') continue;
-			if(!isset(rows[i][k])){
-				if(rows[i][k]==null){
-					values.push("NULL");
-				} else {
-					values.push(" ");
-				}
-			} else if  (rows[i][k]!=='') {
-
-				if (rows[i][k]._wkbType) {
-					var geometry = escapeGeometryType(rows[i][k]);
-					values.push(geometry);
-				} else  if(typeof rows[i][k] === 'number'){
-					values.push(rows[i][k]);
-				} else {
-					values.push(mysql2.escape(rows[i][k]));
-				}
-			} else {
-				values.push("''");
-			}
+var anonymize = function(table, column, value, callback) {
+	if(!anonymizer)
+		return value;
+	anonymizer.check(value, column, function (err, results) {
+		if(results && results.length > 0) {
+			console.log(results);
 		}
-		insertSql = "INSERT INTO `"+table+"` (`"+cols.join("`,`")+"`) VALUES ("+values.join()+");";
-		logger.debug(insertSql);
-		sql.push(insertSql);
-	}
-	return sql.join('\n');
+		callback(null, value);
+	});
+}
+
+var buildInsert = function(rows,table,cols){
+	sync.fiber(function () {
+		var cols = _.keys(rows[0]);
+		var sql = [];
+		for (var i in rows) {
+			var values = [];
+			for (var k in rows[i]) {
+				if (typeof rows[i][k] === 'function') continue;
+				if (!isset(rows[i][k])) {
+					if (rows[i][k] == null) {
+						values.push("NULL");
+					} else {
+						values.push(" ");
+					}
+				} else if (rows[i][k] !== '') {
+					rows[i][k] = sync.await(anonymize(table, k, rows[i][k], sync.defer()));
+					if (rows[i][k]._wkbType) {
+						var geometry = escapeGeometryType(rows[i][k]);
+						values.push(geometry);
+					} else if (typeof rows[i][k] === 'number') {
+						values.push(rows[i][k]);
+					} else {
+						values.push(mysql2.escape(rows[i][k]));
+					}
+				} else {
+					values.push("''");
+				}
+			}
+			insertSql = "INSERT INTO `" + table + "` (`" + cols.join("`,`") + "`) VALUES (" + values.join() + ");";
+			logger.debug(insertSql);
+			sql.push(insertSql);
+		}
+		return sql.join('\n');
+	}, function (err) {
+		return null;
+	});
 }
 
 module.exports = function(options,done){
@@ -149,6 +168,10 @@ module.exports = function(options,done){
 	options = extend({},defaultConnection,defaultOptions,options);
 
 	if(!options.database) throw new Error('Database not specified');
+
+	if(options.anonymizer) {
+		anonymizer = options.anonymizer;
+	}
 
 	mysql = mysql2.createConnection({
 		host: options.host,
@@ -219,24 +242,34 @@ module.exports = function(options,done){
 						opts.where = options.where[table];
 						selectSql += ` WHERE ${options.where[table]}`;
 					}
-					if ((options.order != null) && (options.order != 'undefined')) {
-						opts.order = options.order;
-						if (Array.isArray(options.order) && (typeof options.order[table] != 'undefined')) {
-							opts.order = options.order[table];
+					if (options.orderBy) {
+						opts.orderBy = options.orderBy;
+						if(options.orderBy['*']) {
+							opts.orderBy = options.orderBy['*'];
 						}
-						selectSql += ` ORDER BY ${opts.order}`;
+						if (options.orderBy[table]) {
+							opts.orderBy = options.orderBy[table];
+						}
+						if(!opts.orderBy.trim()) {
+							selectSql += ` ORDER BY ${opts.orderBy}`;
+						}
 					}
-					if ((options.limit != null) && (typeof options.limit != 'undefined')) {
+					if (options.limit) {
 						opts.limit = options.limit;
-						if (Array.isArray(options.limit) && (typeof options.order[table] != 'undefined')) {
+						if(options.limit['*']) {
+							opts.limit = options.limit['*'];
+						}
+						if (options.limit[table]) {
 							opts.limit = options.limit[table];
 						}
-						selectSql += ` LIMIT ${opts.limit}`;
+						if(!opts.limit.toString().trim()) {
+							selectSql += ` LIMIT ${opts.limit}`;
+						}
 					}
 					logger.debug(selectSql);
 					mysql.execute(selectSql, function(err,data){
 						if (err) {
-							logger.err(selectSql + ' => ' + err);
+							logger.error(selectSql + ' => ' + err);
 							return callback(err);
 						}
 						callback(err,buildInsert(data,table));
