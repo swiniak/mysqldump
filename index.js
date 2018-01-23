@@ -10,6 +10,7 @@ const voca = require('voca');
 var anonymizer = undefined;
 var constraints = [];
 var constraintsFlat = [];
+var timers = [];
 
 var extend = function (obj) {
 	for (var i = 1; i < arguments.length; i++) for (var key in arguments[i]) obj[key] = arguments[i][key];
@@ -165,7 +166,7 @@ var anonymize = function (table, column, additionalKey, value, callback) {
 		});
 	}
 	let hint = anonymizer.getMatcherHint(table, column, null, null);
-	if(hint) {
+	if(hint && hint.keyColumn) {
 		hint.keyColumnValue = (additionalKey) ? `${table}.${additionalKey}` : undefined;
 	}
 	anonymizer.check(value, `${table}.${column}`.toLowerCase(), hint, function (err, results) {
@@ -174,12 +175,12 @@ var anonymize = function (table, column, additionalKey, value, callback) {
 			let subTypes = (Array.isArray(results[0].subTypes)) ? _.map(results[0].subTypes, 'name').join() : '';
 			let cacheKey = `${results[0].type}|${subTypes}|${voca.latinise(value).trim()}`.toLowerCase();
 			anonymizer.addToStats(`${table}.${column}`, value, results[0].type);
-			if (anonymizer.similarMemoryCache[cacheKey]) {
+			if (anonymizer.similarMemoryCache[cacheKey] && !(hint && hint.type === 'passthrough')) {
 				logger.silly(`Cache hit: ${cacheKey} -> ${anonymizer.similarMemoryCache[cacheKey]}`)
 				return process.nextTick(callback, null, anonymizer.similarMemoryCache[cacheKey]);
 			}
 			let alternativeCacheKey = `${results[0].type}||${voca.latinise(value).trim()}`.toLowerCase();
-			if (anonymizer.similarMemoryCache[alternativeCacheKey]) {
+			if (anonymizer.similarMemoryCache[alternativeCacheKey] && !(hint && hint.type === 'passthrough')) {
 				logger.silly(`Cache hit: ${alternativeCacheKey} -> ${anonymizer.similarMemoryCache[alternativeCacheKey]}`)
 				return process.nextTick(callback, null, anonymizer.similarMemoryCache[alternativeCacheKey]);
 			}
@@ -197,8 +198,12 @@ var anonymize = function (table, column, additionalKey, value, callback) {
 	});
 }
 
-var buildInsert = function (rows, table, callback) {
+var buildInsert = function (rows, table, fields, callback) {
 	var sql = [];
+	let columns = [];
+	_.forEach(fields, function (field) {
+		columns.push(field.name);
+	});
 	async.eachLimit(rows, 100, function (row, callback) {
 		async.mapValues(row, function (value, key, callback) {
 			if (typeof value === 'function') return process.nextTick(callback);
@@ -235,14 +240,12 @@ var buildInsert = function (rows, table, callback) {
 				logger.error(err);
 				return process.nextTick(callback, err);
 			}
-			let cols = [], values = [];
-			_.forEach(results, function (value, key) {
-				cols.push(key);
-				values.push(value);
+			let values = [];
+			_.forEach(columns, function (column) {
+				values.push(results[column]);
 			});
-			insertSql = "INSERT INTO `" + table + "` (`" + cols.join("`,`") + "`) VALUES (" + values.join() + ");";
-			logger.debug(insertSql);
-			sql.push(insertSql);
+			//logger.debug(insertSql);
+			sql.push(`(${values.join()})`);
 			return process.nextTick(callback);
 		});
 	}, function (err) {
@@ -250,7 +253,7 @@ var buildInsert = function (rows, table, callback) {
 			logger.error(err);
 			return process.nextTick(callback, err);
 		}
-		return process.nextTick(callback, err, sql.join('\n'));
+		return process.nextTick(callback, err, (sql.length > 0) ? "INSERT INTO `" + table + "` (`" + columns.join("`,`") + "`) VALUES " + sql.join(',') + ";" : '');
 	});
 }
 
@@ -276,7 +279,8 @@ module.exports = function (options, done) {
 		dropTable: false,
 		getDump: false,
 		dest: './data.sql',
-		where: null
+		where: null,
+		connectionLimit: 10
 	}
 
 	options = extend({}, defaultConnection, defaultOptions, options);
@@ -298,16 +302,21 @@ module.exports = function (options, done) {
 	//     socketPath: options.socketPath
 	// });
 	let mysql = mysql2.createPool({
-		connectionLimit : 10,
+		connectionLimit : options.connectionLimit,
 		host: options.host,
 		user: options.user,
 		password: options.password,
 		database: options.database,
 		port: options.port,
 		charset: options.charset,
-		socketPath: options.socketPath
+		socketPath: options.socketPath,
 	});
 
+	fs.writeFileSync(options.dest, options.preSql ? options.preSql : '');
+
+	mysql.on('error', function(err) {
+		console.log(err.code);
+	});
 
 	async.auto({
 		setMatcherHints: (callback) => { setMatcherHints(options.matcherHints, callback) },
@@ -322,6 +331,16 @@ module.exports = function (options, done) {
 						constraintsFlat.push(`[${data[i]['TABLE_NAME']}].[${data[i]['COLUMN_NAME']}]`);
 					}
 					callback(err, constraintsFlat);
+				});
+		},
+		findEnums: function (callback) {
+			mysql.query(`SELECT LOWER(TABLE_NAME) as TABLE_NAME, LOWER(COLUMN_NAME) as COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '${options.database}' AND DATA_TYPE = 'enum';`,
+				function (err, data) {
+					for (i in data) {
+						anonymizer.setMatcherHint(data[i]['TABLE_NAME'], data[i]['COLUMN_NAME'], null, null, { type: 'enum' });
+					}
+					//console.dir(anonymizer.matcherHints, {depth: null});
+					callback(err);
 				});
 		},
 		getTables: function (callback) {
@@ -363,7 +382,7 @@ module.exports = function (options, done) {
 				callback(err, resp);
 			});
 		}],
-		createDataDump: ['createSchemaDump', 'loadConstraints', 'setMatcherHints', function (results, callback) {
+		createDataDump: ['createSchemaDump', 'loadConstraints', 'setMatcherHints', 'findEnums', function (results, callback) {
 			var tbls = [];
 			if (options.data) {
 				tbls = results.getTables; // get data for all tables
@@ -399,32 +418,36 @@ module.exports = function (options, done) {
 					}
 					if (options.limit) {
 						opts.limit = '';
-						if (typeof options.limit === 'string') {
+						if (typeof options.limit === 'number') {
 							opts.limit = options.limit;
 						}
-						if (typeof options.limit['*'] === 'string') {
+						if (typeof options.limit['*'] === 'number') {
 							opts.limit = options.limit['*'];
 						}
-						if (typeof options.limit[table] === 'string') {
+						if (typeof options.limit[table] === 'number') {
 							opts.limit = options.limit[table];
 						}
-						if (opts.limit.toString().trim()) {
+						if (String(opts.limit).trim() && opts.limit !== 0) {
 							selectSql += ` LIMIT ${opts.limit}`;
 						}
 					}
 					logger.info(`Dumping table ${table}`);
 					logger.debug(selectSql);
-
-					mysql.execute(selectSql, function (err, data) {
+					timers[table] = process.hrtime();
+					mysql.execute(selectSql, function (err, data, fields) {
+						timers[table] = `Time taken: ${process.hrtime(timers[table])}\nRows: ${(data)? data.length : 0}`;
 						if (err) {
-							logger.error(selectSql + ' => ' + err);
+							logger.error(selectSql + ' => ('+timers[table]+')' + err);
 							return callback(err);
 						}
-						return buildInsert(data, table, callback);
+						return buildInsert(data, table, fields, function(err, insertSql) {
+							fs.appendFileSync(options.dest, '\n' + insertSql+'\n');
+							process.nextTick(callback);
+						});
 					});
 				});
 			});
-			async.parallelLimit(run, 3, callback);
+			async.parallelLimit(run, options.connectionLimit, callback);
 		}],
 		getDataDump: ['createSchemaDump', 'createDataDump', 'setMatcherHints', function (results, callback) {
 			if (!results.createSchemaDump || !results.createSchemaDump.length) results.createSchemaDump = [];
@@ -432,9 +455,10 @@ module.exports = function (options, done) {
 			callback(null, results.createSchemaDump.concat(results.createDataDump).join("\n\n"));
 		}]
 	}, function (err, results) {
+		//console.log(timers);
 		anonymizer.printStats(true);
 		if (err) return done(err);
-		if (options.getDump) return done(err, results.getDataDump);
-		fs.writeFile(options.dest, results.getDataDump, done);
+		//if (options.getDump) return done(err, results.getDataDump);
+		fs.writeFile(options.dest, options.postSql ? options.postSql : '', done);
 	});
 }
