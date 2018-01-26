@@ -11,6 +11,7 @@ var anonymizer = undefined;
 var constraints = [];
 var constraintsFlat = [];
 var timers = [];
+var columnDataTypes = [];
 
 var extend = function (obj) {
 	for (var i = 1; i < arguments.length; i++) for (var key in arguments[i]) obj[key] = arguments[i][key];
@@ -160,6 +161,11 @@ var setMatcherHints = function (hints, callback) {
 var anonymize = function (table, column, additionalKey, value, callback) {
 	if (!anonymizer || constraintsFlat.findIndex(item => `[${table}].[${column}]`.toLowerCase() === item.toLowerCase()) >= 0)
 		return process.nextTick(callback, null, value);
+	if (columnDataTypes[`${table.toLowerCase()}.${column.toLowerCase()}`] === 'json') {
+		return anonymizer.processJson(value, table, column, column, '', function (err, json) {
+			return process.nextTick(callback, null, JSON.stringify(json));
+		});
+	}
 	if (typeof value === 'string' && validator.isJSON(value)) {
 		return anonymizer.processJson(JSON.parse(value), table, column, column, '', function (err, json) {
 			return process.nextTick(callback, null, JSON.stringify(json));
@@ -169,9 +175,9 @@ var anonymize = function (table, column, additionalKey, value, callback) {
 	if(hint && hint.keyColumn) {
 		hint.keyColumnValue = (additionalKey) ? `${table}.${additionalKey}` : undefined;
 	}
-	anonymizer.check(value, `${table}.${column}`.toLowerCase(), hint, function (err, results) {
+	anonymizer.check(value, `${table}.${column}`.toLowerCase(), Object.assign({}, hint), function (err, results) {
 		if (results && results.length > 0) {
-			logger.debug(`[${results[0].type}] ${table}.${column}: ${results[0].original} -> ${results[0].anonymized}`);
+			logger.silly(`[${results[0].type}] ${table}.${column}: ${results[0].original} -> ${results[0].anonymized}`);
 			let subTypes = (Array.isArray(results[0].subTypes)) ? _.map(results[0].subTypes, 'name').join() : '';
 			let cacheKey = `${results[0].type}|${subTypes}|${voca.latinise(value).trim()}`.toLowerCase();
 			anonymizer.addToStats(`${table}.${column}`, value, results[0].type);
@@ -204,7 +210,7 @@ var buildInsert = function (rows, table, fields, callback) {
 	_.forEach(fields, function (field) {
 		columns.push(field.name);
 	});
-	async.eachLimit(rows, 100, function (row, callback) {
+	async.eachLimit(rows, 1, function (row, callback) {
 		async.mapValues(row, function (value, key, callback) {
 			if (typeof value === 'function') return process.nextTick(callback);
 			if (!isset(value)) {
@@ -253,11 +259,17 @@ var buildInsert = function (rows, table, fields, callback) {
 			logger.error(err);
 			return process.nextTick(callback, err);
 		}
-		return process.nextTick(callback, err, (sql.length > 0) ? "INSERT INTO `" + table + "` (`" + columns.join("`,`") + "`) VALUES " + sql.join(',') + ";" : '');
+		return process.nextTick(callback, err, (sql.length > 0) ? "REPLACE INTO `" + table + "` (`" + columns.join("`,`") + "`) VALUES " + sql.join(',') + ";" : '');
 	});
 }
 
 module.exports = function (options, done) {
+	anonymizer = undefined;
+	constraints = [];
+	constraintsFlat = [];
+	timers = [];
+	columnDataTypes = [];
+
 	if (done === undefined)
 		done = function () {
 		};
@@ -280,7 +292,9 @@ module.exports = function (options, done) {
 		getDump: false,
 		dest: './data.sql',
 		where: null,
-		connectionLimit: 10
+		connectionLimit: 10,
+		connectTimeout: 1200000,
+		acquireTimeout: 1200000
 	}
 
 	options = extend({}, defaultConnection, defaultOptions, options);
@@ -312,7 +326,7 @@ module.exports = function (options, done) {
 		socketPath: options.socketPath,
 	});
 
-	fs.writeFileSync(options.dest, options.preSql ? options.preSql : '');
+	fs.writeFileSync(options.baseDir+'/dumps/'+options.dest, options.preSql ? options.preSql : '');
 
 	mysql.on('error', function(err) {
 		console.log(err.code);
@@ -334,10 +348,13 @@ module.exports = function (options, done) {
 				});
 		},
 		findEnums: function (callback) {
-			mysql.query(`SELECT LOWER(TABLE_NAME) as TABLE_NAME, LOWER(COLUMN_NAME) as COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '${options.database}' AND DATA_TYPE = 'enum';`,
+			mysql.query(`SELECT LOWER(TABLE_NAME) as TABLE_NAME, LOWER(COLUMN_NAME) as COLUMN_NAME, LOWER(DATA_TYPE) as DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '${options.database}';`,
 				function (err, data) {
 					for (i in data) {
-						anonymizer.setMatcherHint(data[i]['TABLE_NAME'], data[i]['COLUMN_NAME'], null, null, { type: 'enum' });
+						if(data[i]['COLUMN_NAME'] === 'enum') {
+							anonymizer.setMatcherHint(data[i]['TABLE_NAME'], data[i]['COLUMN_NAME'], null, null, {type: 'enum'});
+						}
+						columnDataTypes[`${data[i]['TABLE_NAME']}.${data[i]['COLUMN_NAME']}`] = data[i]['DATA_TYPE'];
 					}
 					//console.dir(anonymizer.matcherHints, {depth: null});
 					callback(err);
@@ -434,14 +451,15 @@ module.exports = function (options, done) {
 					logger.info(`Dumping table ${table}`);
 					logger.debug(selectSql);
 					timers[table] = process.hrtime();
-					mysql.execute(selectSql, function (err, data, fields) {
+					mysql.query(selectSql, function (err, data, fields) {
 						timers[table] = `Time taken: ${process.hrtime(timers[table])}\nRows: ${(data)? data.length : 0}`;
+						logger.debug(timers[table]);
 						if (err) {
 							logger.error(selectSql + ' => ('+timers[table]+')' + err);
-							return callback(err);
+							return process.nextTick(callback);
 						}
 						return buildInsert(data, table, fields, function(err, insertSql) {
-							fs.appendFileSync(options.dest, '\n' + insertSql+'\n');
+							fs.appendFileSync(options.baseDir+'/dumps/'+options.dest, '\n' + insertSql + '\n');
 							process.nextTick(callback);
 						});
 					});
@@ -455,10 +473,24 @@ module.exports = function (options, done) {
 			callback(null, results.createSchemaDump.concat(results.createDataDump).join("\n\n"));
 		}]
 	}, function (err, results) {
-		//console.log(timers);
+		console.log(timers);
+		mysql.end(function (err) {
+			if(err) {
+				logger.warn(err);
+			}
+		});
+		if(err) {
+			logger.error(err);
+			process.nextTick(done,err);
+		}
+		anonymizer.generateFixedMatchersFromStats(options.baseDir+'/hints/'+options.dest+'.hints', options.matcherHints);
 		anonymizer.printStats(true);
+		anonymizer.printTimers();
+		anonymizer.clearStats();
 		if (err) return done(err);
 		//if (options.getDump) return done(err, results.getDataDump);
-		fs.writeFile(options.dest, options.postSql ? options.postSql : '', done);
+		fs.appendFileSync(options.baseDir+'/dumps/'+options.dest, options.postSql ? options.postSql : '');
+		logger.info(`Dump stored at ${options.baseDir+'/dumps/'+options.dest}`);
+		process.nextTick(done);
 	});
 }
